@@ -1152,8 +1152,4 @@ CREATE PACKAGE BODY leonova_student_actions AS
       END;
   
 END;
-
---                    SELECT COUNT(CASE WHEN dis_mark IS NOT NULL) FROM leonova_gradebook JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
---                                                                         leonova_gradebook.dis_control = leonova_discipline.control AND 
---                                                                         leonova_gradebook.group_name = leonova_discipline.group_name
---                                                                         WHERE leonova_discipline.name_tutor = 'А.И. Дмитриев' AND dis_mark is null;    
+    
