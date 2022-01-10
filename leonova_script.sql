@@ -34,19 +34,19 @@ CREATE TABLE leonova_student (
 
 -- Задание первичного ключа для таблицы "Студент"
 ALTER TABLE leonova_student
-    ADD CONSTRAINT leonova_student_pk PRIMARY KEY (id);
+    ADD CONSTRAINT leonova_st_pk PRIMARY KEY (id);
 
 -- Задание первичного ключа для таблицы "Зачетка"
 ALTER TABLE leonova_gradebook
-    ADD CONSTRAINT leonova_gradebook_pk PRIMARY KEY (student_id, dis_name, dis_control, group_name);
+    ADD CONSTRAINT leonova_grade_pk PRIMARY KEY (student_id, dis_name, dis_control, group_name);
     
  -- Задание первичного ключа для таблицы "Предмет"   
 ALTER TABLE leonova_discipline
-    ADD CONSTRAINT leonova_discipline_pk PRIMARY KEY (name_dis, control, group_name);
+    ADD CONSTRAINT leonova_dis_pk PRIMARY KEY (name_dis, control, group_name);
  
 -- Уникальность id и названия групп в таблице "Студент"    
 ALTER TABLE leonova_student
-    ADD CONSTRAINT leonova_student_un UNIQUE (id, group_name);
+    ADD CONSTRAINT leonova_st_un UNIQUE (id, group_name);
     
 ---- Задание составного внешнего ключа для связи (зачетка - предмет)
 ALTER TABLE leonova_gradebook
@@ -350,14 +350,14 @@ CREATE PACKAGE leonova_student_actions AS
 -- Средний балл
     PROCEDURE avg_marks;
     
--- Количество оценок каждого типа по 1 преподавателю 
-    PROCEDURE count_marks_one (name_t VARCHAR);
-    
 -- Количество оценок каждого типа по каждому преподавателю
     PROCEDURE count_marks;
       
 -- Длительность сессии в днях для каждой группы
     PROCEDURE  session_length;
+    
+-- Перевести студента в другую группу
+    PROCEDURE move_student (stud_id NUMBER, new_group VARCHAR);
     
 -- Средняя стипендия по каждой группе и университету в целом
     PROCEDURE avg_all;
@@ -412,11 +412,11 @@ CREATE PACKAGE BODY leonova_student_actions AS
         max_z NUMBER;
         
         BEGIN
-            --Максимальное количество зачетов у студента данной группы
+            -- Максимальное количество зачетов у студента данной группы
             SELECT MAX(count_d) INTO max_z FROM (SELECT COUNT(dis_name) AS count_d FROM leonova_gradebook WHERE group_name = new_group_name AND dis_control = 'Зачёт' GROUP BY student_id);
-            --Максимальное количество экзаменов у студента данной группы
+            -- Максимальное количество экзаменов у студента данной группы
             SELECT MAX(count_d) INTO max_ex FROM (SELECT COUNT(dis_name) AS count_d FROM leonova_gradebook WHERE group_name = new_group_name AND dis_control = 'Экзамен' GROUP BY student_id);
-        
+            -- Если у кого-то из студентов уже достаточно зачетов/экзаменов, то выбрасываем исключение
             IF (new_control = 'Зачёт' AND max_z >= 6) OR (new_control = 'Экзамен' AND max_ex >= 5) THEN
                 RAISE many_control_exc;
             END IF;
@@ -425,7 +425,6 @@ CREATE PACKAGE BODY leonova_student_actions AS
             SELECT MAX(date_d) INTO max_date FROM leonova_discipline WHERE group_name = new_group_name AND control = 'Зачёт';
             --Дата первого экзамена
             SELECT MIN(date_d) INTO min_date FROM leonova_discipline WHERE group_name = new_group_name AND control = 'Экзамен';
-            
             -- Если добавляем зачет, то его дата должна быть меньше чем дата первого экзамена
             -- Если добавляем экзамен, то его дата должна быть больше, чем дата последнего зачета
             IF (new_date_d > min_date AND new_control = 'Зачёт') OR (new_control = 'Экзамен' AND new_date_d <= max_date) THEN
@@ -435,13 +434,14 @@ CREATE PACKAGE BODY leonova_student_actions AS
             -- Получаем количество предметов для данной группы в выбраный день
             SELECT COUNT(name_dis) INTO count_date FROM leonova_discipline 
                     WHERE group_name = new_group_name AND date_d = new_date_d;
-            -- Имя преподавателя должно быть записано символами, а не цифрами
-            IF regexp_like(new_name_tutor, '[[:digit:]]') THEN
-                RAISE alph_ex;
-            END IF;
             -- Если количество предметов в этот день больше 1, то новый предмет не добавляем
             IF (count_date > 0) THEN
                 RAISE date_exc; 
+            END IF;
+            
+           -- Имя преподавателя должно быть записано символами, а не цифрами
+            IF regexp_like(new_name_tutor, '[[:digit:]]') THEN
+                RAISE alph_ex;
             END IF;
                         
             -- Вставить новую запись в таблицу "Предмет"
@@ -691,15 +691,15 @@ CREATE PACKAGE BODY leonova_student_actions AS
         s_group VARCHAR(15 BYTE);
         
         CURSOR stud IS SELECT * FROM leonova_gradebook WHERE student_id = stud_id;	
-        
         stud_rec stud%rowtype;
-        BEGIN
-            SELECT name, NVL(agrant, '0'), group_name INTO s_name, s_agrant, s_group FROM leonova_student WHERE id = stud_id;
-            
+        
+        BEGIN             
             -- id студента должно быть заполнено положительным числом
             IF (stud_id IS NULL OR stud_id < 0) THEN
                 RAISE null_id;
             END IF;
+            
+            SELECT name, NVL(agrant, '0'), group_name INTO s_name, s_agrant, s_group FROM leonova_student WHERE id = stud_id;
             
             OPEN stud;
             
@@ -742,20 +742,10 @@ CREATE PACKAGE BODY leonova_student_actions AS
     PROCEDURE print_all_marks (new_group_name VARCHAR) IS
 
     CURSOR stud IS
-			SELECT leonova_gradebook.STUDENT_ID, leonova_gradebook.DIS_NAME,
-                    leonova_gradebook.DIS_CONTROL, leonova_gradebook.DIS_MARK,
-                    leonova_student.ID, leonova_student.NAME,
-                    leonova_student.AGRANT, leonova_student.GROUP_NAME 
-                FROM leonova_gradebook JOIN leonova_student ON leonova_gradebook.student_id = leonova_student.id
-                ORDER BY leonova_gradebook.group_name;
+			SELECT DISTINCT student_id FROM leonova_gradebook;
                 
     CURSOR stud_gr IS
-			SELECT leonova_gradebook.STUDENT_ID, leonova_gradebook.DIS_NAME,
-                    leonova_gradebook.DIS_CONTROL, leonova_gradebook.DIS_MARK,
-                    leonova_student.ID, leonova_student.NAME,
-                    leonova_student.AGRANT, leonova_student.GROUP_NAME 
-                FROM leonova_gradebook JOIN leonova_student ON leonova_gradebook.student_id = leonova_student.id WHERE leonova_gradebook.group_name = new_group_name
-                ORDER BY leonova_gradebook.group_name;
+			SELECT DISTINCT student_id FROM leonova_gradebook WHERE leonova_gradebook.group_name = new_group_name;
 			
         stud_rec stud%rowtype;
         stud_gr_rec stud%rowtype;
@@ -881,7 +871,8 @@ CREATE PACKAGE BODY leonova_student_actions AS
 -- Средний балл
     PROCEDURE avg_marks IS
     CURSOR marks IS SELECT student_id, name, ROUND(AVG(NVL(dis_mark, '2')), 1) AS a_mark FROM leonova_gradebook 
-                                JOIN leonova_student ON leonova_student.id = leonova_gradebook.student_id WHERE leonova_gradebook.dis_control = 'Экзамен' GROUP BY student_id, name; 
+                                JOIN leonova_student ON leonova_student.id = leonova_gradebook.student_id 
+                                WHERE leonova_gradebook.dis_control = 'Экзамен' GROUP BY student_id, name; 
     marks_rec marks%rowtype;
     BEGIN
         OPEN marks;
@@ -909,51 +900,21 @@ CREATE PACKAGE BODY leonova_student_actions AS
             WHEN empty_cursor THEN
                 dbms_output.put_line('Список пуст');
     END;
-     
--- Количество оценок каждого типа по 1 преподавателю 
-    PROCEDURE count_marks_one (name_t VARCHAR) IS 
-        CURSOR count_m IS SELECT NVL(dis_mark, 'Неявка') AS type_marks, 
-                                leonova_discipline.name_tutor, 
-                                COUNT(NVL(dis_mark, 'Неявка')) AS count_marks 
-                                FROM leonova_gradebook 
-                                JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
-                                                           leonova_gradebook.dis_control = leonova_discipline.control AND 
-                                                           leonova_gradebook.group_name = leonova_discipline.group_name
-                                WHERE leonova_discipline.name_tutor = name_t
-                                GROUP BY leonova_discipline.name_tutor, NVL(dis_mark, 'Неявка') ORDER BY leonova_discipline.name_tutor;
-            count_rec count_m%rowtype;
-        BEGIN
-            OPEN count_m;
-            
-            FETCH count_m INTO count_rec;
-            -- Если список пустой, выбрасываем исключения    
-            IF count_m%notfound THEN
-                CLOSE count_m;
-                RAISE empty_cursor;
-            END IF;
-            dbms_output.put_line('Тип оценки, количество оценок данного типа:');
-            LOOP
-                EXIT WHEN count_m%notfound;
-                    dbms_output.put_line('"' || count_rec.type_marks || '"' || ' - ' || count_rec.count_marks);
-                FETCH count_m INTO count_rec;
-            END LOOP;
-            
-            EXCEPTION
-            WHEN CURSOR_ALREADY_OPEN THEN
-                dbms_output.put_line('Попытка открыть уже ранее открытый курсор');
-                
-            WHEN INVALID_CURSOR THEN
-                dbms_output.put_line('Некорректная операция с курсором');
-                
-            WHEN empty_cursor THEN
-                dbms_output.put_line('Список пуст');
-        END;
-    
+      
 -- Количество оценок каждого типа по каждому преподавателю  
     PROCEDURE count_marks IS
     
     CURSOR count_m IS SELECT DISTINCT(name_tutor) FROM leonova_discipline;
         count_rec count_m%rowtype;
+        
+        count_5 NUMBER;
+        count_4 NUMBER;
+        count_3 NUMBER;
+        count_2 NUMBER;
+        count_z NUMBER;
+        count_nz NUMBER;
+        count_nl NUMBER;
+        
         BEGIN
             OPEN count_m;
             
@@ -964,10 +925,45 @@ CREATE PACKAGE BODY leonova_student_actions AS
                 RAISE empty_cursor;
             END IF;
             
+            dbms_output.put_line('Преподаватель | Неявка | Зачёт | Незачёт | 5 | 4 | 3 | 2');
             LOOP
                 EXIT WHEN count_m%notfound;
-                    dbms_output.put_line(count_rec.name_tutor);
-                    count_marks_one (count_rec.name_tutor);
+                    SELECT COUNT(dis_mark) INTO count_z FROM leonova_gradebook JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
+                                                                         leonova_gradebook.dis_control = leonova_discipline.control AND 
+                                                                         leonova_gradebook.group_name = leonova_discipline.group_name
+                                                                         WHERE leonova_discipline.name_tutor = count_rec.name_tutor AND dis_mark = 'Зачёт';
+                                                                         
+                    SELECT COUNT(dis_mark) INTO count_nz FROM leonova_gradebook JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
+                                                                         leonova_gradebook.dis_control = leonova_discipline.control AND 
+                                                                         leonova_gradebook.group_name = leonova_discipline.group_name
+                                                                         WHERE leonova_discipline.name_tutor = count_rec.name_tutor AND dis_mark = 'Незачёт';  
+                                                                         
+                    SELECT COUNT(dis_mark) INTO count_5 FROM leonova_gradebook JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
+                                                                         leonova_gradebook.dis_control = leonova_discipline.control AND 
+                                                                         leonova_gradebook.group_name = leonova_discipline.group_name
+                                                                         WHERE leonova_discipline.name_tutor = count_rec.name_tutor AND dis_mark = '5';
+                                                                         
+                    SELECT COUNT(dis_mark) INTO count_4 FROM leonova_gradebook JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
+                                                                         leonova_gradebook.dis_control = leonova_discipline.control AND 
+                                                                         leonova_gradebook.group_name = leonova_discipline.group_name
+                                                                         WHERE leonova_discipline.name_tutor = count_rec.name_tutor AND dis_mark = '4';
+                                                                         
+                    SELECT COUNT(dis_mark) INTO count_3 FROM leonova_gradebook JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
+                                                                         leonova_gradebook.dis_control = leonova_discipline.control AND 
+                                                                         leonova_gradebook.group_name = leonova_discipline.group_name
+                                                                         WHERE leonova_discipline.name_tutor = count_rec.name_tutor AND dis_mark = '3';  
+                                                                         
+                    SELECT COUNT(dis_mark) INTO count_2 FROM leonova_gradebook JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
+                                                                         leonova_gradebook.dis_control = leonova_discipline.control AND 
+                                                                         leonova_gradebook.group_name = leonova_discipline.group_name
+                                                                         WHERE leonova_discipline.name_tutor = count_rec.name_tutor AND dis_mark = '2'; 
+                                                                         
+                    SELECT COUNT(NVL(dis_mark, 'Неявка')) INTO count_nl FROM leonova_gradebook JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
+                                                                         leonova_gradebook.dis_control = leonova_discipline.control AND 
+                                                                         leonova_gradebook.group_name = leonova_discipline.group_name
+                                                                         WHERE leonova_discipline.name_tutor = count_rec.name_tutor AND dis_mark is null;                                                                          
+                                                                         
+            dbms_output.put_line(count_rec.name_tutor || ' | ' || count_nl || ' | ' || count_z || ' | ' || count_nz || ' | ' || count_5 || ' | ' || count_4 || ' | ' || count_3 || ' | ' || count_2);
                 FETCH count_m INTO count_rec;
             END LOOP;
             
@@ -1015,19 +1011,109 @@ CREATE PACKAGE BODY leonova_student_actions AS
                 WHEN empty_cursor THEN
                     dbms_output.put_line('Список пуст');
       END;
+      
+-- Перевести студента в другую группу
+    PROCEDURE move_student (stud_id NUMBER, new_group VARCHAR) IS
+    
+        stud_name VARCHAR2(100 BYTE);
+        old_group VARCHAR2(15 BYTE);
+        count_gr NUMBER;
+        
+        BEGIN
+        
+            IF ((stud_id IS NULL) OR (new_group IS NULL) OR (stud_id <= 0)) THEN
+                RAISE null_id;
+            END IF;
+                
+            -- Получаем имя и старую группу студента
+            SELECT name, group_name INTO stud_name, old_group FROM leonova_student WHERE id = stud_id;
+                   
+             -- Создаем временный объект
+            INSERT INTO leonova_student (id ,name, agrant, group_name) values ('999999', stud_name, NULL, new_group);
+            
+            -- Удалить все не совпадающие предметы для оригинального объекта.
+            DELETE FROM leonova_gradebook WHERE student_id = stud_id AND NOT EXISTS (SELECT * FROM leonova_discipline WHERE group_name = new_group 
+                AND dis_name = leonova_discipline.name_dis);
+            
+            SELECT COUNT(dis_name) INTO count_gr FROM leonova_gradebook WHERE student_id = stud_id;
+            
+            IF (count_gr > 0) THEN
+                  -- Сохранить совпадающие предметы в отдельную запись    
+                    INSERT INTO leonova_gradebook (student_id, group_name, dis_name, dis_control, dis_mark) 
+                                SELECT '999999', new_group, dis_name, dis_control, dis_mark 
+                                    FROM (SELECT dis_name, dis_control, dis_mark FROM leonova_gradebook WHERE student_id = stud_id);
+                    
+                    -- Полностью удалить все для оригинального объекта                
+                    DELETE FROM leonova_gradebook WHERE student_id = stud_id;
+                    
+                    -- Поменять группу у оригинального объекта в таблице студент
+                    UPDATE leonova_student SET group_name = new_group WHERE id = stud_id;
+                    
+                    -- Добавить в зачетку уже сданные предметы оригинальному объекту
+                    INSERT INTO leonova_gradebook (student_id, group_name, dis_name, dis_control, dis_mark) 
+                                SELECT stud_id, new_group, dis_name, dis_control, dis_mark 
+                                    FROM (SELECT dis_name, dis_control, dis_mark FROM leonova_gradebook WHERE student_id = '999999');
+                                    
+                    -- Добавить в зачетку новые предметы оригинальному объекту
+                    INSERT INTO leonova_gradebook (student_id, group_name, dis_name, dis_control, dis_mark) 
+                                 SELECT stud_id, group_name, name_dis, control, NULL 
+                                    FROM (SELECT group_name, name_dis, control FROM leonova_discipline WHERE leonova_discipline.group_name = new_group AND 
+                                        NOT EXISTS (SELECT * FROM leonova_gradebook gr WHERE student_id = stud_id AND group_name = gr.group_name AND name_dis = gr.dis_name AND control = gr.dis_control));
+                                                
+                    DELETE FROM leonova_gradebook WHERE  student_id = '999999'; 
+            END IF;
+            
+            IF (count_gr = 0) THEN
+                    -- Полностью удалить все для оригинального объекта                
+                    DELETE FROM leonova_gradebook WHERE student_id = stud_id;
+                    
+                    -- Поменять группу у оригинального объекта в таблице студент
+                    UPDATE leonova_student SET group_name = new_group WHERE id = stud_id;
+                    
+                    INSERT INTO leonova_gradebook (student_id, group_name, dis_name, dis_control, dis_mark) 
+                                     SELECT stud_id, group_name, name_dis, control, NULL 
+                                        FROM (SELECT group_name, name_dis, control FROM leonova_discipline WHERE leonova_discipline.group_name = new_group AND 
+                                            NOT EXISTS (SELECT * FROM leonova_gradebook gr WHERE student_id = stud_id AND group_name = gr.group_name AND name_dis = gr.dis_name AND control = gr.dis_control));
+            
+            END IF;
+            
+            DELETE FROM leonova_student WHERE id = '999999';
+            
+            COMMIT;
+            
+            EXCEPTION
+                WHEN null_id THEN
+                    dbms_output.put_line('Id и/или новая группа студента не заданы');
+                    
+                WHEN DUP_VAL_ON_INDEX THEN
+                    dbms_output.put_line('Попытка вставить дубликат');
+                    
+                WHEN INVALID_NUMBER THEN
+                    dbms_output.put_line('Попытка вставить некорректные данные');
+            
+        END;
         
 -- Средняя стипендия по каждой группе и университету в целом
       PROCEDURE avg_all IS
-      
+        -- По каждой группе
         CURSOR stud IS 
          SELECT c1, c2, a1, a2, g1 
             FROM (SELECT COUNT(s1.id) c1, ROUND(AVG(s1.agrant), 1) a1, NVL(s1.group_name, 'Без группы') g1 FROM leonova_student s1 WHERE s1.agrant > 0 GROUP BY s1.group_name) 
             JOIN (SELECT COUNT(s2.id) c2, ROUND(AVG(NVL(s2.agrant, '0')), 1) a2, NVL(s2.group_name, 'Без группы') g2 FROM leonova_student s2  GROUP BY s2.group_name) 
                 ON g1 = g2;
+        -- По университету
+        count_all NUMBER;
+        count_agr NUMBER;
+        avg_all NUMBER;
+        avg_agr NUMBER;
                 
        stud_rec stud%rowtype;
        
        BEGIN
+       
+           SELECT COUNT(s1.id) c1, ROUND(AVG(s1.agrant), 1) a1 INTO count_agr, avg_agr FROM leonova_student s1 WHERE s1.agrant > 0;
+           SELECT COUNT(s2.id) c2, ROUND(AVG(NVL(s2.agrant, '0')), 1) a2 INTO count_all, avg_all FROM leonova_student s2;
+            
            OPEN stud;
            
              FETCH stud INTO stud_rec;
@@ -1049,7 +1135,11 @@ CREATE PACKAGE BODY leonova_student_actions AS
                     
                END LOOP;
                CLOSE stud;
-                
+               
+               dbms_output.put_line('Кол-во студентов университета - ' || count_all || 
+                                    ', их средняя стипендия - ' || avg_all);
+               dbms_output.put_line('Кол-во студентов университета , получающих стипендию - ' || count_agr || 
+                                    ', их средняя стипендия - ' || avg_agr);
            EXCEPTION
                WHEN CURSOR_ALREADY_OPEN THEN
                    dbms_output.put_line('Попытка открыть уже ранее открытый курсор');
@@ -1060,5 +1150,10 @@ CREATE PACKAGE BODY leonova_student_actions AS
                WHEN empty_cursor THEN
                    dbms_output.put_line('Список пуст');
       END;
-      
-END;                                           
+  
+END;
+
+--                    SELECT COUNT(CASE WHEN dis_mark IS NOT NULL) FROM leonova_gradebook JOIN leonova_discipline ON leonova_gradebook.dis_name = leonova_discipline.name_dis AND 
+--                                                                         leonova_gradebook.dis_control = leonova_discipline.control AND 
+--                                                                         leonova_gradebook.group_name = leonova_discipline.group_name
+--                                                                         WHERE leonova_discipline.name_tutor = 'А.И. Дмитриев' AND dis_mark is null;    
